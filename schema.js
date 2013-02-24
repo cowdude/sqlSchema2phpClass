@@ -1,3 +1,13 @@
+var schema = process.argv[2];
+var outPattern = process.argv[3];
+
+if (process.argv.length < 4)
+{
+	console.log("Usage: node schema.js schemas.sql outFilePattern");
+	console.log("Example: node schema.js foo.sql classes/{className}.php");
+	process.exit();
+}
+
 var fs = require('fs');
 
 var mysqlSchema = {};
@@ -459,7 +469,15 @@ var parseAlterTable = function (request)
 
 ////////////////////////////////////////////////////////////////////////
 
-var schema = fs.readFileSync("./test.schema.sql").toString();
+try
+{
+	schema = fs.readFileSync(schema).toString();
+}
+catch (e)
+{
+	console.error("Failed to read schemas");
+	process.exit();
+}
 var tables = parse(schema);
 
 var files = [];
@@ -824,14 +842,23 @@ for (var i in classes)
 	var obj = classes[i];
 	
 	//create a new file
-	var fileName = "php/" + obj.name + ".php";
+	var fileName = outPattern.replace("{className}", obj.name);
 	
 	var code = obj.serialize();
 	
 	//save file
-	var dataHandle = fs.createWriteStream(fileName, {'flags': 'w', 'encoding':'utf8'});
-	dataHandle.write(code);
-	dataHandle.end();
+	var dataHandle;
+	try
+	{
+		dataHandle = fs.createWriteStream(fileName, {'flags': 'w', 'encoding':'utf8'});
+		dataHandle.write(code);
+		dataHandle.end();
+	}
+	catch (e)
+	{
+		console.error("Failed to write PHP class file: " + fileName);
+		process.exit();
+	}
 	
 	console.log("Created class " + obj.name);
 }
