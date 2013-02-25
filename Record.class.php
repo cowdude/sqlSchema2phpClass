@@ -24,17 +24,55 @@ abstract class Record
 	private static function _where_identifier ($args)
 	{
 		$str = "WHERE ";
-		foreach (static::$_sqlIdentifier as $field)
+		foreach (static::$SQLINFO['identifier'] as $field)
 		{
-			$str .= "`$field` = " . self::escape( self::encodeSqlValue($field, $args->$field) ) . " AND ";
+			if (is_array($args))
+			{
+				$str .= "`$field` = " . self::escape( self::encodeSqlValue($field, $args[$field]) ) . " AND ";
+			}
+			else
+			{
+				$str .= "`$field` = " . self::escape( self::encodeSqlValue($field, $args->$field) ) . " AND ";
+			}
 		}
+		if ($str == "WHERE ") throw new Exception();
+		
 		$str = substr($str, 0, -4);
 		return $str;
+	}
+	
+	public function identifierSlug ()
+	{
+		$values = array();
+		foreach (static::$SQLINFO['identifier'] as $field)
+		{
+			$values[] = $this->$field;
+		}
+		return implode('-', $values);
+	}
+	public static function getOneByIdentifierSlug ($slug)
+	{
+		$values = explode('-', $slug);
+		$valuesLookup=array();
+		$i=0;
+		foreach (static::$SQLINFO['identifier'] as $field)
+		{
+			$valuesLookup[$field] = $values[$i++];
+		}
+		
+		$where = self::_where_identifier($valuesLookup);
+		
+		$ret = self::getAll($where, array(
+			"pageSize" => 1
+		));
+		
+		return count($ret) == 1 ? $ret[0] : null;
 	}
 	
 	//this record
 	private $_dirtyFields = array();
 	private $_new = true;
+	private $_beforeCommitState = null;
 	public function dirty ()
 	{
 		return count($this->_dirtyFields) > 0 || $this->_new;
@@ -50,21 +88,17 @@ abstract class Record
 	}
 	
 	//this sql related
-	private function insert()
+	public function insert()
 	{
 		//invalidate cache
 		self::clearCache();
 		
-		$tok = array();
-		foreach (static::$_sqlFields as $field)
-		{
-			$val = $this->$field;
-			$tok[] = self::escape( self::encodeSqlValue($field,$val) );
-		}
-		$values = implode(", ", $tok);
-		$fieldNames = "`" . implode("`, `", static::$_sqlFields) . "`";
+		//store state
+		$this->_beforeCommitState = $this->copy();
 		
-		$sql = "insert into `".static::$_sqlTable."` ($fieldNames) VALUES ($values)";
+		$sql = $this->insertRequest();
+		if (!$sql)
+			return false;
 		
 		$ok = self::sql($sql) !== false;
 		if ($ok)
@@ -73,7 +107,7 @@ abstract class Record
 			$id = mysql_insert_id(self::$connection);
 			if ($id > 0)
 			{
-				$idField = static::$_sqlIdentifier;
+				$idField = static::$SQLINFO['identifier'];
 				if (count($idField) !== 1)
 				{
 					throw new Exception("FixMe: cannot guess AUTO_INCREMENT field!");
@@ -85,18 +119,55 @@ abstract class Record
 			$this->_new = false;
 			$this->_dirtyFields = array();
 		}
-		
 		return $ok;
+	}
+	private function insertRequest()
+	{
+		if (!$this->isNew())
+			return null;
+		
+		$tok = array();
+		foreach (static::$SQLINFO['fieldNames'] as $field)
+		{
+			$val = $this->$field;
+			$tok[] = self::escape( self::encodeSqlValue($field,$val) );
+		}
+		$values = implode(", ", $tok);
+		$fieldNames = "`" . implode("`, `", static::$SQLINFO['fieldNames']) . "`";
+		
+		$sql = "insert into `".static::$SQLINFO['tableName']."` ($fieldNames) VALUES ($values)";
+		
+		return $sql;
 	}
 	private function update()
 	{
 		//invalidate cache
 		self::clearCache();
 		
-		$sql = "update `".static::$_sqlTable."` SET ";
+		//store state
+		$this->_beforeCommitState = $this->copy();
+		
+		$sql = $this->updateRequest();
+		if (!$sql)
+			return false;
+		
+		$ok = self::sql($sql) !== false;
+		if ($ok)
+		{
+			$this->_new = false;
+			$this->_dirtyFields = array();
+		}
+		return $ok;
+	}
+	private function updateRequest()
+	{
+		if (!$this->dirty())
+			return null;
+		
+		$sql = "update `".static::$SQLINFO['tableName']."` SET ";
 		
 		$tok = array();
-		foreach (static::$_sqlFields as $field)
+		foreach (static::$SQLINFO['fieldNames'] as $field)
 		{
 			$dirty = isset($this->_dirtyFields[$field]);
 			if ($dirty)
@@ -108,14 +179,7 @@ abstract class Record
 		$sql .= implode(", ", $tok);
 		$sql .= " " . self::_where_identifier($this);
 		
-		$ok = self::sql($sql) !== false;
-		if ($ok)
-		{
-			$this->_new = false;
-			$this->_dirtyFields = array();
-		}
-		
-		return $ok;
+		return $sql;
 	}
 	public function delete()
 	{
@@ -125,7 +189,7 @@ abstract class Record
 		//invalidate cache
 		self::$_sqlQueryCache=array();
 		
-		$sql = "delete from `".static::$_sqlTable."` ";
+		$sql = "delete from `".static::$SQLINFO['tableName']."` ";
 		$sql .= self::_where_identifier($this);
 		
 		return self::sql($sql) !== false;
@@ -136,10 +200,77 @@ abstract class Record
 		if (!$this->dirty())
 			return true;
 		
+		if (!$this->isValid())
+			throw new Exception("Cannot commit this ".static::$STD_NAME.": object is not valid");
+		
 		if ($this->_new)
 			return $this->insert();
 		else
 			return $this->update();
+	}
+	
+	//user classes may override this
+	public function isValid ()
+	{
+		return true;
+	}
+	
+	public function beforeCommitState ()
+	{
+		return $this->_beforeCommitState;
+	}
+	
+	public function copy ()
+	{
+		$that = new static::$STD_NAME();
+		
+		foreach (static::$SQLINFO['fieldNames'] as $field)
+		{
+			$that->$field = $this->$field;
+		}
+		$that->_dirtyFields = array();
+		foreach ($this->_dirtyFields as $key=>$val)
+		{
+			$that->_dirtyFields[$key] = $val;
+		}
+		$that->_new = $this->_new;
+		
+		return $that;
+	}
+	
+	public static function safeGetAll($options=array())
+	{
+		return self::getAll('', $options);
+	}
+	
+	protected static function getAll ($where, $options=array())
+	{
+		$sql = "select * from `".static::$SQLINFO['tableName']."`";
+		if ($where)
+			$sql .= " " . $where;
+		
+		if (isset($options['pageSize']))
+		{
+			$pageSize = (int)$options['pageSize'];
+			$pageIndex = isset($options['pageIndex']) ? ((int)$options['pageIndex']) : 0;
+			$sql .= " LIMIT ".($pageIndex*$pageSize).", ".$pageSize;
+		}
+		
+		$objects = self::sql($sql);
+		$ret = array();
+		$type=static::$STD_NAME;
+		foreach ($objects as $o)
+		{
+			$obj = new $type($o);
+			$obj->_new = false;
+			$ret[] = $obj;
+		}
+		return $ret;
+	}
+	
+	public function isNew ()
+	{
+		return $this->_new;
 	}
 	
 	//sql helpers
@@ -204,7 +335,7 @@ abstract class Record
 		}
 		
 		//internal
-		foreach (static::$_sqlFields as $field)
+		foreach (static::$SQLINFO['fieldNames'] as $field)
 		{
 			$val = $sqlRow[$field];
 			$this->$field = self::decodeSqlValue($field,$val);
@@ -215,7 +346,7 @@ abstract class Record
 	//getters
 	protected static function get_one ($args)
 	{
-		$sql = "select * from ".static::$_sqlTable." where ";
+		$sql = "select * from ".static::$SQLINFO['tableName']." where ";
 		
 		$tok = array();
 		foreach ($args as $key=>$val)
@@ -239,7 +370,7 @@ abstract class Record
 	}
 	protected static function get_many ($args, $options)
 	{
-		$sql = "select * from ".static::$_sqlTable." where ";
+		$sql = "select * from ".static::$SQLINFO['tableName']." where ";
 		
 		$tok = array();
 		foreach ($args as $key=>$val)
@@ -330,8 +461,18 @@ abstract class Record
 	
 	private static function decodeSqlValue ($field, $value)
 	{
-		if (isset(static::$_datetime_fields[$field]))
+		if (isset(static::$SQLINFO['fieldTypes']['datetime'][$field]))
 			return self::fromDatetime($value);
+		else if (isset(static::$SQLINFO['fieldTypes']['int'][$field]))
+			return (int) $value;
+		else if (isset(static::$SQLINFO['fieldTypes']['uint'][$field]))
+			return (int) $value;
+		else if (isset(static::$SQLINFO['fieldTypes']['double'][$field]))
+			return (double) $value;
+		else if (isset(static::$SQLINFO['fieldTypes']['bool'][$field]))
+			return (bool)( (int)$value );
+		else if (isset(static::$SQLINFO['fieldTypes']['enum'][$field]))
+			return $value;
 		//TODO: add more decoding types here
 		else
 			return $value;
@@ -339,11 +480,47 @@ abstract class Record
 	private static function encodeSqlValue ($field, $value)
 	{
 		if ($value === null)
-			return "NULL";
-		else if (isset(static::$_datetime_fields[$field]))
+			return null;
+		else if (isset(static::$SQLINFO['fieldTypes']['datetime'][$field]))
 			return self::toDatetime($value);
+		else if (isset(static::$SQLINFO['fieldTypes']['int'][$field]))
+			return (int) $value;
+		else if (isset(static::$SQLINFO['fieldTypes']['uint'][$field]))
+			return max(0, (int) $value);
+		else if (isset(static::$SQLINFO['fieldTypes']['bool'][$field]))
+			return (double)$value;
+		else if (isset(static::$SQLINFO['fieldTypes']['enum'][$field]))
+			return $value; //TODO: check value...maybe.
 		//TODO: add more decoding types here
 		else
 			return $value;
+	}
+	
+	public function toString()
+	{
+		$x = "[" . static::$STD_NAME . " ";
+		
+		foreach (static::$SQLINFO['fieldNames'] as $fieldName)
+		{
+			$x .= $fieldName . "='" . $this->$fieldName . "' ";
+		}
+		
+		$x .= "]";
+		return $x;
+	}
+	
+	public function equals ($that)
+	{
+		if ($that === null)
+			return false;
+		if (get_class($that) !== get_class($this))
+			return false;
+		
+		foreach (static::$SQLINFO['identifier'] as $id)
+		{
+			if ($this->$id !== $that->$id)
+				return false;
+		}
+		return true;
 	}
 }

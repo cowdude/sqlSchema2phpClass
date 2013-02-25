@@ -130,34 +130,34 @@ requestParser.prototype.parseIdentifier = function ()
 };
 
 requestParser.types = {
-	"tinyint" : { args: 1 },
-	"smallint" : { args: 1 },
-	"mediumint" : { args: 1 },
-	"int" : { args: 1 },
-	"bigint" : { args: 1 },
-	"float" : { args: 2 },
-	"double" : { args: 2 },
-	"decimal" : { args: 2 },
-	"bit" : { args: 1 },
-	"char" : { args: 1 },
-	"varchar" : { args: 1 },
-	"tinytext" : { args: 0 },
-	"text" : { args: 0 },
-	"mediumtext" : { args: 0 },
-	"longtext" : { args: 0 },
+	"tinyint" : { args: 1, isInt:true },
+	"smallint" : { args: 1, isInt:true },
+	"mediumint" : { args: 1, isInt:true },
+	"int" : { args: 1, isInt:true },
+	"bigint" : { args: 1, isInt:true },
+	"float" : { args: 2, isDouble:true },
+	"double" : { args: 2, isDouble:true },
+	"decimal" : { args: 2, isDouble:true },
+	"bit" : { args: 1, isBool:true },
+	"char" : { args: 1, isString:true },
+	"varchar" : { args: 1, isString:true },
+	"tinytext" : { args: 0, isString:true },
+	"text" : { args: 0, isString:true },
+	"mediumtext" : { args: 0, isString:true },
+	"longtext" : { args: 0, isString:true },
 	"binary" : { args: 1 },
 	"varbinary" : { args: 1 },
 	"tinyblob" : { args: 0 },
 	"blob" : { args: 0 },
 	"mediumblob" : { args: 0 },
 	"longblob" : { args: 0 },
-	"enum" : { args: 65535 },
-	"set" : { args: 64 },
-	"date" : { args: 0 },
-	"datetime" : { args: 0 },
-	"time" : { args: 0 },
-	"timestamp" : { args: 0 },
-	"year" : { args: 0 },
+	"enum" : { args: 65535, isEnum:true },
+	"set" : { args: 64, isEnum:true },
+	"date" : { args: 0, isDate:true },
+	"datetime" : { args: 0, isDate:true },
+	"time" : { args: 0, isInt:true },
+	"timestamp" : { args: 0, isInt:true },
+	"year" : { args: 0, isInt:true },
 };
 requestParser.modifiers = {
 	"not null":			/NOT NULL/i,
@@ -263,6 +263,7 @@ requestParser.prototype.parseType = function()
 	ret.kind = word;
 	ret.maxArguments = typeWord.args;
 	ret.arguments = [];
+	ret.word = typeWord;
 	
 	//parse args, if any
 	this.skipMany(' ');
@@ -277,7 +278,12 @@ requestParser.prototype.parseType = function()
 			throw "too many type arguments";
 		
 		for (var i=0; i<sub.length; i++)
-			ret.arguments[i] = parseInt(sub[i]);
+		{
+			var a = parseInt(sub[i]);
+			if (isNaN(a))
+				a=sub[i];
+			ret.arguments[i] = a;
+		}
 		
 		//jump outside of parenthesis
 		this.pos += end + 1;
@@ -538,23 +544,23 @@ var phpClass = function(name, sqlTable, identifiers)
 	};
 	this.identifiers = identifiers;
 };
-phpClass.prototype.addField = function(fieldName, fieldType)
+phpClass.prototype.addField = function(f)
 {
-	this.fields[fieldName] = { name:fieldName, type:fieldType };
+	this.fields[f.name] = f;
 };
 phpClass.prototype.one2one = function(thisField, thatClass, thatField)
 {
-	this.ref.one2one[thatClass.name] = { thisField:thisField, thatField:thatField };
+	this.ref.one2one[thatClass.name] = { thisField:thisField, thatField:thatField, real:true };
 	thatClass.ref.one2one[this.name] = { thisField:thatField, thatField:thisField };
 };
 phpClass.prototype.one2many = function(thisField, thatClass, thatField)
 {
-	this.ref.one2many[thatClass.name] = { thisField:thisField, thatField:thatField };
+	this.ref.one2many[thatClass.name] = { thisField:thisField, thatField:thatField, real:true };
 	thatClass.ref.many2one[this.name] = { thisField:thatField, thatField:thisField };
 };
 phpClass.prototype.many2one = function(thisField, thatClass, thatField)
 {
-	this.ref.many2one[thatClass.name] = { thisField:thisField, thatField:thatField };
+	this.ref.many2one[thatClass.name] = { thisField:thisField, thatField:thatField, real:true };
 	thatClass.ref.one2many[this.name] = { thisField:thatField, thatField:thisField };
 };
 phpClass.prototype.serialize = function ()
@@ -583,22 +589,42 @@ phpClass.prototype.serialize = function ()
 		}).call(_this, fn);
 	};
 	
+	var phpize = function(obj, _indent)
+	{
+		var tabs = _indent || '';
+		tabs += indent;
+		
+		if (typeof obj == 'object')
+		{
+			var _x = "array(\n";
+			
+			for (var oKey in obj)
+			{
+				var oVal = phpize(obj[oKey], tabs + '\t');
+				_x += tabs + "'"+oKey+"' => "+oVal+",\n";
+			}
+			return _x + tabs.substring(1) + ")";
+		}
+		else
+			return obj.toString();
+	};
+	
 	writeLine("<?php");
 	writeLine("class "+this.classPrefix+this.name+" extends "+this.extends);
 	block(function()
 	{
 		writeLine("// SQL info");
+		var sqlInfo = {};
 		
 		//table name
-		writeLine("public static $_sqlTable = '"+this.sqlTable+"';");
+		sqlInfo.tableName = "'"+this.sqlTable+"'";
 		
 		//field names
-		write("public static $_sqlFields = array(");
-		var fnames=[];
+		sqlInfo.fieldNames=[];
 		for (var i in this.fields)
-			fnames.push(this.fields[i].name);
-		write("'" + fnames.join("', '") + "'");
-		writeLine(");");
+		{
+			sqlInfo.fieldNames.push("'"+this.fields[i].name+"'");
+		}
 		
 		//identifier names
 		var identifier = null;
@@ -612,21 +638,102 @@ phpClass.prototype.serialize = function ()
 		}
 		if (!identifier)
 			throw "PHP Class "+this.name+" has no primary key defined.";
-		write("public static $_sqlIdentifier = array(");
-		write("'" + identifier.fields.join("', '") + "'");
-		writeLine(");");
+		sqlInfo.identifier = [];
+		for (var i=0; i<identifier.fields.length; i++)
+		{
+			sqlInfo.identifier.push("'"+identifier.fields[i]+"'");
+		}
 		
 		//special field types
-		var datetimeFields = [];
+		var fieldTypes = {};
+		fieldTypes.datetime={};
+		fieldTypes.int={};
+		fieldTypes.uint={};
+		fieldTypes.double={};
+		fieldTypes.bool={};
+		fieldTypes.enum={};
 		
 		for (var i in this.fields)
 		{
-			if (this.fields[i].type.kind == "datetime")
-				datetimeFields.push("'" + this.fields[i].name + "'");
+			var name=this.fields[i].name;
+			var type=this.fields[i].type;
+			var kind=type.kind;
+			var unsigned = false;
+			for (var j=0; j<this.fields[i].modifiers.length; j++)
+			{
+				if (this.fields[i].modifiers[j].type == "unsigned")
+					unsigned = true;
+			}
+			var category = null;
+			var val = 'true';
+			
+			if (type.word.isDate)
+				category = "datetime";
+			else if (type.word.isInt && unsigned)
+				category = "uint";
+			else if (type.word.isInt && !unsigned)
+				category = "int";
+			else if (type.word.isDouble)
+				category = "double";
+			else if (type.word.isBool)
+				category = "bool";
+			else if (type.word.isEnum)
+			{
+				category = "enum";
+				val = type.arguments;
+			}
+			else if (type.word.isString)
+			{
+				//dont care
+			}
+			else
+				console.warn("unknown type:", type);
+			
+			if (category)
+				fieldTypes[category][name] = val;
 		}
-		write("public static $_datetime_fields = array(");
-		write(datetimeFields.join(", "));
-		writeLine(");");
+		sqlInfo.fieldTypes = {};
+		for (var categoryType in fieldTypes)
+		{
+			sqlInfo.fieldTypes[categoryType] = fieldTypes[categoryType];
+		}
+		
+		//sql references
+		var sqlRefs = {
+			many2one: {},
+			one2many: {},
+			one2one: {},
+		};
+		for (var refType in this.ref)
+		{
+			var tok = refType.split('2');
+			var thisPlural = tok[0] == "many";
+			var thatPlural = tok[1] == "many";
+			
+			for (var thatClassName in this.ref[refType])
+			{
+				var ref = this.ref[refType][thatClassName];
+				//dont print fake relationships in sql info block
+				if (!ref.real)
+					continue;
+				
+				sqlRefs[refType][thatClassName] = {
+					foreignKey: "'"+ref.thisField+"'",
+					referenceKey: "'"+ref.thatField+"'",
+				};
+			}
+		}
+		sqlInfo.references = {};
+		for (var i in sqlRefs)
+		{
+			sqlInfo.references[i] = sqlRefs[i];
+		}
+		
+		writeLine("public static $SQLINFO = " + phpize(sqlInfo) + ";");
+		writeLine("\n");
+		writeLine("// --------------------------------------------------");
+		writeLine("\n");
+		writeLine("\n");
 		
 		//class name (fast reflection)
 		writeLine("public static $STD_NAME = '"+this.name+"';");
@@ -639,6 +746,7 @@ phpClass.prototype.serialize = function ()
 		}
 		
 		writeLine("// Getters");
+		
 		for (var i=0; i<this.identifiers.length; i++)
 		{
 			var identifier = this.identifiers[i];
@@ -647,16 +755,6 @@ phpClass.prototype.serialize = function ()
 			var argNames = identifier.fields.join(", ");
 			var methodArguments = [];
 			var options = {};
-			
-			var phpize = function(obj)
-			{
-				var _x = "array(";
-				for (var oKey in obj)
-				{
-					_x += "'"+oKey+"' => "+obj[oKey]+",";
-				}
-				return _x + ")";
-			};
 			
 			//prettier name
 			if (identifier.fields.length == 1)
@@ -773,7 +871,7 @@ phpClass.prototype.serialize = function ()
 				if (!thatName)
 					throw JSON.stringify(thatClass.sqlTable);
 				
-				writeLine("protected function "+thatName+" ($pageSize=null, $pageIndex=null)");
+				writeLine("public function "+thatName+" ($pageSize=null, $pageIndex=null)");
 				block(function()
 				{
 					writeLine("return self::Ref_"+refType+"("+
@@ -836,7 +934,7 @@ for (var tableName in tables)
 	for (var i=0; i<table.fields.length; i++)
 	{
 		var field = table.fields[i];
-		obj.addField(field.name, field.type);
+		obj.addField(field);
 	}
 	
 	//constraints
