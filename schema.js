@@ -164,6 +164,7 @@ requestParser.modifiers = {
 	"auto increment":	/AUTO_INCREMENT/i,
 	"collate":			/COLLATE\s+[^\s]+/i,
 	"default":			/DEFAULT\s+'[^']*'/i,
+	"unsigned":			/unsigned/i,
 };
 requestParser.keys = {
 	"primary":	/PRIMARY KEY\s+\([^\)]+\)/i ,
@@ -629,7 +630,18 @@ phpClass.prototype.serialize = function ()
 			var methodName = identifier.unique ? "getOne" : "getMany";
 			var baseName = identifier.unique ? "get_one" : "get_many";
 			var argNames = identifier.fields.join(", ");
-			var methodArgument = "args";
+			var methodArguments = [];
+			var options = {};
+			
+			var phpize = function(obj)
+			{
+				var _x = "array(";
+				for (var oKey in obj)
+				{
+					_x += "'"+oKey+"' => "+obj[oKey]+",";
+				}
+				return _x + ")";
+			};
 			
 			//prettier name
 			if (identifier.fields.length == 1)
@@ -638,36 +650,67 @@ phpClass.prototype.serialize = function ()
 				x = x[0].toUpperCase() + x.substring(1);
 				methodName += "By" + x;
 				
-				methodArgument = identifier.fields[0];
+				methodArguments = [ { name:identifier.fields[0], initializer:null } ];
 			}
+			else
+			{
+				methodArguments = [];
+				for (var j=0; j<identifier.fields.length; j++)
+				{
+					methodArguments.push({
+						name: identifier.fields[j],
+						initializer: null,
+					});
+				}
+			}
+			
+			//pagination
+			if (!identifier.unique)
+			{
+				methodArguments.push({ name: "pageSize", initializer: "null" });
+				methodArguments.push({ name: "pageIndex", initializer: "null" });
+				options.pageSize = "$pageSize";
+				options.pageIndex = "$pageIndex";
+			}
+			
+			//baking arguments string
+			var argumentString = [];
+			for (var k=0; k<methodArguments.length; k++)
+			{
+				var a = methodArguments[k];
+				var str = "$" + a.name;
+				if (a.initializer)
+					str += "="+a.initializer;
+				
+				argumentString.push(str);
+			}
+			argumentString = argumentString.join(", ");
+			
+			//baking 1st sub-argument (args->array)
+			var arr1={};
+			for (var k=0; k<identifier.fields.length; k++)
+			{
+				arr1[identifier.fields[k]] = "$" + identifier.fields[k];
+			}
+			arr1 = phpize(arr1);
+			
+			//baking 2nd sub-argument (options)
+			var arr2 = phpize(options);
 			
 			if (identifier.fields.length == 1)
 			{
-				writeLine("public static function "+methodName+" ($"+methodArgument+")");
+				writeLine("public static function "+methodName+" ("+argumentString+")");
 				block(function()
 				{
-					writeLine("return self::"+baseName+"(array('"+methodArgument+"' => $"+methodArgument+"));");
+					writeLine("return self::"+baseName+"("+arr1+", "+arr2+");");
 				});
 			}
 			else
 			{
-				methodArgument = "$"+identifier.fields.join(", $");
-				
-				writeLine("public static function "+methodName+" ("+methodArgument+")");
+				writeLine("public static function "+methodName+" ("+argumentString+")");
 				block(function()
 				{
-					writeLine("return self::"+baseName+"(array(");
-					for (var k=0; k<identifier.fields.length; k++)
-					{
-						var field = identifier.fields[k];
-						write("'"+field+"' => $"+field);
-						if (k < identifier.fields.length-1)
-						{
-							write(",");
-						}
-						writeLine("");
-					}
-					writeLine("));");
+					writeLine("return self::"+baseName+"("+arr1+", "+arr2+");");
 				});
 			}
 		}
@@ -715,12 +758,14 @@ phpClass.prototype.serialize = function ()
 				if (!thatName)
 					throw JSON.stringify(thatClass.sqlTable);
 				
-				writeLine("protected function get_"+thatName+" ()");
+				writeLine("protected function "+thatName+" ($pageSize=null, $pageIndex=null)");
 				block(function()
 				{
 					writeLine("return self::Ref_"+refType+"("+
 						"$this->"+constraint.thisField+", " +
-						"'"+thatClass.name+"', '"+constraint.thatField+"');"
+						"'"+thatClass.name+"', '"+constraint.thatField+"', " +
+						"array('pageSize' => $pageSize, 'pageIndex' => $pageIndex)" + 
+						");"
 					);
 				});
 			}

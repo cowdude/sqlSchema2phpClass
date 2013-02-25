@@ -232,7 +232,7 @@ abstract class Record
 		$obj->_new = false;
 		return $obj;
 	}
-	protected static function get_many ($args)
+	protected static function get_many ($args, $options)
 	{
 		$sql = "select * from ".static::$_sqlTable." where ";
 		
@@ -242,6 +242,13 @@ abstract class Record
 			$tok[] = "`$key` = " . self::escape($val);
 		}
 		$sql .= implode(" AND ", $tok);
+		
+		if (isset($options['pageSize']))
+		{
+			$pageSize = (int)$options['pageSize'];
+			$pageIndex = isset($options['pageIndex']) ? ((int)$options['pageIndex']) : 0;
+			$sql .= " LIMIT ".($pageIndex*$pageSize).", ".$pageSize;
+		}
 		
 		$objects = self::sql($sql);
 		$ret = array();
@@ -256,20 +263,20 @@ abstract class Record
 	}
 	
 	//constraints
-	protected static function Ref_one2many ($val, $thatClass, $thatField)
+	protected static function Ref_one2many ($val, $thatClass, $thatField, $options)
 	{
 		$getter = "getManyBy" . strtoupper($thatField{0}) . substr($thatField,1);
-		return $thatClass::$getter($val);
+		return $thatClass::$getter($val, @$options['pageSize'], @$options['pageIndex']);
 	}
-	protected static function Ref_one2one ($val, $thatClass, $thatField)
+	protected static function Ref_one2one ($val, $thatClass, $thatField, $options)
 	{
 		$getter = "getOneBy" . strtoupper($thatField{0}) . substr($thatField,1);
-		return $thatClass::$getter($val);
+		return $thatClass::$getter($val, @$options['pageSize'], @$options['pageIndex']);
 	}
-	protected static function Ref_many2one ($val, $thatClass, $thatField)
+	protected static function Ref_many2one ($val, $thatClass, $thatField, $options)
 	{
 		$getter = "getOneBy" . strtoupper($thatField{0}) . substr($thatField,1);
-		return $thatClass::$getter($val);
+		return $thatClass::$getter($val, @$options['pageSize'], @$options['pageIndex']);
 	}
 	
 	//accessors
