@@ -26,7 +26,7 @@ abstract class Record
 		$str = "WHERE ";
 		foreach (static::$_sqlIdentifier as $field)
 		{
-			$str .= "`$field` = " . self::escape($args->$field) . " AND ";
+			$str .= "`$field` = " . self::escape( self::encodeSqlValue($field, $args->$field) ) . " AND ";
 		}
 		$str = substr($str, 0, -4);
 		return $str;
@@ -54,7 +54,7 @@ abstract class Record
 		foreach (static::$_sqlFields as $field)
 		{
 			$val = $this->$field;
-			$tok[] = self::escape($val);
+			$tok[] = self::escape( self::encodeSqlValue($field,$val) );
 		}
 		$values = implode(", ", $tok);
 		$fieldNames = "`" . implode("`, `", static::$_sqlFields) . "`";
@@ -97,7 +97,7 @@ abstract class Record
 			if ($dirty)
 			{
 				$val = $this->$field;
-				$tok[] = "`$field` = " . self::escape($val);
+				$tok[] = "`$field` = " . self::escape( self::encodeSqlValue($val) );
 			}
 		}
 		$sql .= implode(", ", $tok);
@@ -202,7 +202,7 @@ abstract class Record
 		foreach (static::$_sqlFields as $field)
 		{
 			$val = $sqlRow[$field];
-			$this->$field = $val;
+			$this->$field = self::decodeSqlValue($field,$val);
 		}
 		$this->_dirtyFields = array();
 	}
@@ -215,7 +215,7 @@ abstract class Record
 		$tok = array();
 		foreach ($args as $key=>$val)
 		{
-			$tok[] = "`$key` = " . self::escape($val);
+			$tok[] = "`$key` = " . self::escape( self::encodeSqlValue($key,$val) );
 		}
 		$sql .= implode(" AND ", $tok);
 		
@@ -239,7 +239,7 @@ abstract class Record
 		$tok = array();
 		foreach ($args as $key=>$val)
 		{
-			$tok[] = "`$key` = " . self::escape($val);
+			$tok[] = "`$key` = " . self::escape( self::encodeSqlValue($key,$val) );
 		}
 		$sql .= implode(" AND ", $tok);
 		
@@ -307,9 +307,38 @@ abstract class Record
 		if ($this->Accessible($name))
 		{
 			if (method_exists($this, "set_$name"))
-				$this->{"set_$name"}($value);
+				$this->{"set_$name"}( $value );
 			else
 				throw new Exception("Readonly Property $name");
 		}
+	}
+	
+	//data type formatters
+	private static function toDatetime ($x)
+	{
+		return date('Y-m-d H:i:s', $x);
+	}
+	private static function fromDatetime ($x)
+	{
+		return strtotime('Y-m-d H:i:s', $x . " GMT");
+	}
+	
+	private static function decodeSqlValue ($field, $value)
+	{
+		if (isset(static::$_datetime_fields[$field]))
+			return self::fromDatetime($value);
+		//TODO: add more decoding types here
+		else
+			return $value;
+	}
+	private static function encodeSqlValue ($field, $value)
+	{
+		if ($value === null)
+			return "NULL";
+		else if (isset(static::$_datetime_fields[$field]))
+			return self::toDatetime($value);
+		//TODO: add more decoding types here
+		else
+			return $value;
 	}
 }

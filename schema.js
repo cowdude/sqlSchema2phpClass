@@ -536,9 +536,9 @@ var phpClass = function(name, sqlTable, identifiers)
 	};
 	this.identifiers = identifiers;
 };
-phpClass.prototype.addField = function(fieldName)
+phpClass.prototype.addField = function(fieldName, fieldType)
 {
-	this.fields[fieldName] = fieldName;
+	this.fields[fieldName] = { name:fieldName, type:fieldType };
 };
 phpClass.prototype.one2one = function(thisField, thatClass, thatField)
 {
@@ -594,7 +594,7 @@ phpClass.prototype.serialize = function ()
 		write("public static $_sqlFields = array(");
 		var fnames=[];
 		for (var i in this.fields)
-			fnames.push(this.fields[i]);
+			fnames.push(this.fields[i].name);
 		write("'" + fnames.join("', '") + "'");
 		writeLine(");");
 		
@@ -614,13 +614,26 @@ phpClass.prototype.serialize = function ()
 		write("'" + identifier.fields.join("', '") + "'");
 		writeLine(");");
 		
+		//special field types
+		var datetimeFields = [];
+		
+		for (var i in this.fields)
+		{
+			if (this.fields[i].type.kind == "datetime")
+				datetimeFields.push("'" + this.fields[i].name + "'");
+		}
+		write("public static $_datetime_fields = array(");
+		write(datetimeFields.join(", "));
+		writeLine(");");
+		
+		//class name (fast reflection)
 		writeLine("public static $STD_NAME = '"+this.name+"';");
 		
 		writeLine("// Fields");
 		for (var i in this.fields)
 		{
 			var field = this.fields[i];
-			writeLine("private $_"+field+";");
+			writeLine("private $_"+field.name+";");
 		}
 		
 		writeLine("// Getters");
@@ -718,7 +731,7 @@ phpClass.prototype.serialize = function ()
 		writeLine("// Accessors");
 		for (var i in this.fields)
 		{
-			var field = this.fields[i];
+			var field = this.fields[i].name;
 			
 			writeLine("protected function get_"+field+" ()");
 			block(function()
@@ -821,7 +834,7 @@ for (var tableName in tables)
 	for (var i=0; i<table.fields.length; i++)
 	{
 		var field = table.fields[i];
-		obj.addField(field.name);
+		obj.addField(field.name, field.type);
 	}
 	
 	//constraints
