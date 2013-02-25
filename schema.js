@@ -527,6 +527,8 @@ var phpClass = function(name, sqlTable, identifiers)
 	console.log("new PHP Class: ", name,sqlTable);
 	
 	this.name=name;
+	this.extends="Record";
+	this.classPrefix="";
 	this.sqlTable=sqlTable;
 	this.fields = {};
 	this.ref = {
@@ -582,7 +584,7 @@ phpClass.prototype.serialize = function ()
 	};
 	
 	writeLine("<?php");
-	writeLine("class "+this.name+" extends Record");
+	writeLine("class "+this.classPrefix+this.name+" extends "+this.extends);
 	block(function()
 	{
 		writeLine("// SQL info");
@@ -895,12 +897,24 @@ for (var tableName in tables)
 
 //generate php classes
 
+var fileExists = function(file)
+{
+	try {
+		var stats = fs.lstatSync(file);
+		return stats.isFile();
+	}
+	catch (e) {
+		return false;
+	}
+};
+
 for (var i in classes)
 {
 	var obj = classes[i];
+	obj.classPrefix = "SQL_";
 	
 	//create a new file
-	var fileName = outPattern.replace("{className}", obj.name);
+	var fileName = outPattern.replace("{className}", obj.classPrefix+obj.name);
 	
 	var code = obj.serialize();
 	
@@ -918,5 +932,31 @@ for (var i in classes)
 		process.exit();
 	}
 	
-	console.log("Created class " + obj.name);
+	//create wrapper to handle user defined stuff
+	var wrapper = "" +
+		"<?php\n" +
+		"class "+obj.name+" extends SQL_"+obj.name+"\n" +
+		"{\n" +
+		"\t//Put your custom functions here.\n" +
+		"}\n";
+	
+	var wrapperFileName = outPattern.replace("{className}", obj.name);
+	
+	if (!fileExists(wrapperFileName))
+	{
+		//save wrapper
+		try
+		{
+			dataHandle = fs.createWriteStream(wrapperFileName, {'flags': 'w', 'encoding':'utf8'});
+			dataHandle.write(wrapper);
+			dataHandle.end();
+		}
+		catch (e)
+		{
+			console.error("Failed to write PHP wrapper class file: " + wrapperFileName);
+			process.exit();
+		}
+	}
+	
+	console.log("Created classes for type: " + obj.name);
 }
