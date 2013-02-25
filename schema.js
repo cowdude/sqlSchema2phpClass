@@ -162,8 +162,8 @@ requestParser.types = {
 requestParser.modifiers = {
 	"not null":			/NOT NULL/i,
 	"auto increment":	/AUTO_INCREMENT/i,
-	"collate":			/COLLATE\s+[^\s]+/i,
-	"default":			/DEFAULT\s+'[^']*'/i,
+	"collate":			/COLLATE\s+[^\s,]+/i,
+	"default":			/DEFAULT\s+[^\s,]+/i,
 	"unsigned":			/unsigned/i,
 };
 requestParser.keys = {

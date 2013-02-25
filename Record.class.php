@@ -44,11 +44,16 @@ abstract class Record
 		$this->_dirtyFields[$field]=true;
 	}
 	
+	protected static function clearCache ()
+	{
+		self::$_sqlQueryCache=array();
+	}
+	
 	//this sql related
 	private function insert()
 	{
 		//invalidate cache
-		self::$_sqlQueryCache=array();
+		self::clearCache();
 		
 		$tok = array();
 		foreach (static::$_sqlFields as $field)
@@ -86,7 +91,7 @@ abstract class Record
 	private function update()
 	{
 		//invalidate cache
-		self::$_sqlQueryCache=array();
+		self::clearCache();
 		
 		$sql = "update `".static::$_sqlTable."` SET ";
 		
@@ -97,7 +102,7 @@ abstract class Record
 			if ($dirty)
 			{
 				$val = $this->$field;
-				$tok[] = "`$field` = " . self::escape( self::encodeSqlValue($val) );
+				$tok[] = "`$field` = " . self::escape( self::encodeSqlValue($field,$val) );
 			}
 		}
 		$sql .= implode(", ", $tok);
