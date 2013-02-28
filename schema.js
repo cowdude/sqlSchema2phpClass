@@ -666,7 +666,7 @@ var phpClass = function(name, sqlTable, identifiers)
 	this.classPrefix="";
 	this.sqlTable=sqlTable;
 	this.fields = {};
-	this.parent=null;
+	this.parent={};
 	this.children = [];
 	this.ref = {
 		one2one: {},
@@ -742,7 +742,7 @@ phpClass.prototype.serialize = function ()
 	};
 	
 	writeLine("<?php");
-	writeLine("class "+this.classPrefix+this.name+" extends "+this.parent);
+	writeLine("class "+this.classPrefix+this.name+" extends "+this.parent.name);
 	block(function()
 	{
 		writeLine("// SQL info");
@@ -922,7 +922,10 @@ phpClass.prototype.serialize = function ()
 			sqlInfo.foreignReferences[i] = fakeSqlRefs[i];
 		
 		//inheritance, if any
-		sqlInfo.parent = this.parent && this.parent.name ? ("'"+this.parent.name+"'") : 'null';
+		sqlInfo.parent = {};
+		for (var i in this.parent)
+			sqlInfo.parent[i] = "'" + this.parent[i] + "'";
+		
 		sqlInfo.children = {};
 		for (var i=0; i<this.children.length; i++)
 			sqlInfo.children[this.children[i].name] = 'true';
