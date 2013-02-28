@@ -11,16 +11,20 @@ abstract class Record
 			throw new Exception("Attempted to connect twice to mysql");
 		}
 		
-		$args=(object)$args;
-		self::$connection = mysql_connect($args->host, $args->login, $args->password);
-		if (!self::$connection)
+		try
+		{
+			self::$connection = new MySQLConnection($args);
+			return true;
+		}
+		catch (Exception $ex)
+		{
 			return false;
-		
-		if (!mysql_select_db($args->database, self::$connection))
-			return false;
-		
-		return true;
+		}
 	}
+	
+	//reflection helpers
+	
+	
 	private static function _where_identifier ($args)
 	{
 		$str = "WHERE ";
