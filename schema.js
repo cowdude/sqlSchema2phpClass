@@ -548,10 +548,10 @@ var parseCreateTable = function (request)
 				
 				if (argument === '@extends')
 				{
-					if (keys.length != 3)
-						throw "Wrong argument count for argument @extends. Usage: @extends(parentTable, match=thisKey, on=parentKey";
+					if (keys.length != 3 || !params['on'] || !params['with'])
+						throw "Wrong arguments for argument @extends. Usage: @extends(parentTable, on=thisKey, with=parentKey";
 					parent.name = keys[0];
-					parent.thisKey = params['match'];
+					parent.thisKey = params['on'];
 					parent.parentKey = params['with'];
 				}
 				else
@@ -922,10 +922,13 @@ phpClass.prototype.serialize = function ()
 			sqlInfo.foreignReferences[i] = fakeSqlRefs[i];
 		
 		//inheritance, if any
-		sqlInfo.parent = {};
-		for (var i in this.parent)
-			sqlInfo.parent[i] = "'" + this.parent[i] + "'";
-		
+		sqlInfo.parent = null;
+		if (this.parent.thisKey)
+		{
+			sqlInfo.parent={};
+			for (var i in this.parent)
+				sqlInfo.parent[i] = "'" + this.parent[i] + "'";
+		}
 		sqlInfo.children = {};
 		for (var i=0; i<this.children.length; i++)
 			sqlInfo.children[this.children[i].name] = 'true';
@@ -1128,23 +1131,23 @@ var getClassByTable = function (table)
 	
 	var x = new phpClass(className, sqlTable, identifiers);
 	
-	if (table.parent)
+	if (table.parent.name)
 	{
 		for (var i in classes)
 		{
-			if (classes[i].sqlTable === table.parent)
+			if (classes[i].sqlTable === table.parent.name)
 			{
-				x.parent = classes[i].name;
+				x.parent = table.parent;
 				classes[i].children.push(x);
 				break;
 			}
 		}
-		if (!x.parent)
-			throw "Failed to find parent class: " + table.parent;
+		if (!x.parent.thisKey)
+			throw "Failed to find parent class: " + table.parent.name;
 	}
 	else
 	{
-		x.parent = "Record";
+		x.parent.name = "Record";
 	}
 	
 	classes[className]=x;
