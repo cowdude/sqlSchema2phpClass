@@ -519,7 +519,7 @@ var parseCreateTable = function (request)
 	
 	//parse table modifiers and properties
 	var tableModifiers = [];
-	var parent=null;
+	var parent={};
 	
 	while (request.pos < request.request.length)
 	{
@@ -548,9 +548,11 @@ var parseCreateTable = function (request)
 				
 				if (argument === '@extends')
 				{
-					if (keys.length != 1)
-						throw "Wrong argument count for argument " + argument+": "+tmod.groups[0];
-					parent = keys[0];
+					if (keys.length != 3)
+						throw "Wrong argument count for argument @extends. Usage: @extends(parentTable, match=thisKey, on=parentKey";
+					parent.name = keys[0];
+					parent.thisKey = params['match'];
+					parent.parentKey = params['with'];
 				}
 				else
 					throw "Unknown table argument: " + argument + " for table " + tableName;
@@ -1026,6 +1028,16 @@ phpClass.prototype.serialize = function ()
 		
 		//inheritance casting
 		writeLine("// Inheritance casts");
+		for (var i=0; i<this.children.length; i++)
+		{
+			var child = this.children[i];
+			
+			writeLine("public function as"+child.name+" ()");
+			block(function()
+			{
+				writeLine("return new ");
+			});
+		}
 		
 		writeLine("// Accessors");
 		for (var i in this.fields)
