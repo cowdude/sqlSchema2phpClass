@@ -249,6 +249,19 @@ abstract class Record
 		if ($where)
 			$sql .= " " . $where;
 		
+		if (isset($options['orderBy']))
+		{
+			$orderField = $options['orderBy'];
+			//ensure field is valid
+			if (!in_array($orderField, static::$SQLINFO['fieldNames'], true))
+			{
+				throw new Exception("Cannot order by '$orderField': field does not exists");
+			}
+			
+			$orderASC = isset($options['orderASC']) ? ((bool)$options['orderASC']) : true;
+			$sql .= " ORDER BY `".$orderField."` ".($orderASC ? "ASC":"DESC");
+		}
+		
 		if (isset($options['pageSize']))
 		{
 			$pageSize = (int)$options['pageSize'];
@@ -452,11 +465,12 @@ abstract class Record
 	//data type formatters
 	private static function toDatetime ($x)
 	{
+		//throws exception
 		return date('Y-m-d H:i:s', $x);
 	}
 	private static function fromDatetime ($x)
 	{
-		return strtotime('Y-m-d H:i:s', $x . " GMT");
+		return strtotime($x . ' ' . date('T'));
 	}
 	
 	private static function decodeSqlValue ($field, $value)
@@ -507,6 +521,124 @@ abstract class Record
 		
 		$x .= "]";
 		return $x;
+	}
+	
+	//returns a list of thisFields that are foreign keys, and associated invocation info
+	public static function foreignFields ()
+	{
+		$ret=array();
+		foreach (static::$SQLINFO['references'] as $refType=>$refCollection)
+		{
+			$single = $refType == 'many2one' || $refType == 'one2one';
+			
+			foreach ($refCollection as $refClassName=>$ref)
+			{
+				$getter = $single ? 'getOneBy' : 'getManyBy';
+				$getter .= ucfirst($ref['referenceKey']);
+				
+				$ret[$ref['foreignKey']] = array(
+					'className' => $refClassName,
+					'getter' => $getter,
+					'single' => $single,
+				);
+			}
+		}
+		return $ret;
+	}
+	
+	public static function foreignReferences ()
+	{
+		$ret=array();
+		foreach (static::$SQLINFO['foreignReferences'] as $refType=>$refCollection)
+		{
+			$single = $refType == 'many2one' || $refType == 'one2one';
+			
+			foreach ($refCollection as $refClassName=>$ref)
+			{
+				$getter = $single ? 'getOneBy' : 'getManyBy';
+				$getter .= ucfirst($ref['referenceKey']);
+				
+				if (!isset($ret[$ref['foreignKey']]))
+					$ret[$ref['foreignKey']]=array();
+				
+				$ret[$ref['foreignKey']][] = array(
+					'className' => $refClassName,
+					'getter' => $getter,
+					'single' => $single,
+					'key' => $ref['referenceKey']
+				);
+			}
+		}
+		return $ret;
+	}
+	
+	//resolves references and returns an object that represents this record
+	public function toObject ($maxDepth=0, $refObjects=array())
+	{
+		if ($maxDepth < 0)
+			return 'DEPTH_RESOLVE_LIMIT';
+		
+		$identifier = static::$STD_NAME . ':' . $this->identifierSlug();
+		if (isset($refObjects[$identifier]))
+		{
+			//avoid circular dependencies
+			return $refObjects[$identifier];
+		}
+		
+		$obj = array();
+		
+		//fields
+		foreach (static::$SQLINFO['fieldNames'] as $f)
+		{
+			$obj[$f] = $this->$f;
+		}
+		
+		//add this object to visited nodes list
+		$refObjects[$identifier] = $obj;
+		
+		//references
+		$refs=array();
+		foreach (static::$SQLINFO['references'] as $refType=>$refCollection)
+			$refs[$refType] = $refCollection;
+		foreach (static::$SQLINFO['foreignReferences'] as $refType=>$refCollection)
+		{
+			foreach ($refCollection as $k=>$v)
+				$refs[$refType][$k] = $v;
+		}
+		
+		foreach ($refs as $refType=>$refCollection)
+		{
+			$single = $refType == 'many2one' || $refType == 'one2one';
+			
+			foreach ($refCollection as $refClassName=>$ref)
+			{
+				$getter = $single ? "getOneBy" : "getManyBy";
+				$getter .= ucfirst($ref['referenceKey']);
+				$thisVal = $this->{$ref['foreignKey']};
+				$objField = $refClassName;
+				
+				$thatRecords = $refClassName::$getter($thisVal);
+				
+				if (!$single)
+				{
+					$tmp=array();
+					foreach ($thatRecords as $r)
+					{
+						$tmp[] = $r->toObject($maxDepth-1, $refObjects);
+					}
+					$thatRecords=$tmp;
+				}
+				else
+				{
+					if ($thatRecords != null)
+						$thatRecords = $thatRecords->toObject($maxDepth-1, $refObjects);
+				}
+				//can be a single object or an array
+				$obj[$objField] = $thatRecords;
+			}
+		}
+		
+		return (object)$obj;
 	}
 	
 	public function equals ($that)

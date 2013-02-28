@@ -16,6 +16,66 @@ String.prototype.startsWith = function(x)
 {
 	return this.indexOf(x) === 0;
 };
+var getKeys = function(x)
+{
+	var ret=[];
+	for (var i in x)
+		if (x[i] !== x.__proto__[i])
+			ret.push(i);
+	return ret;
+}
+var getValues = function(x)
+{
+	var ret=[];
+	for (var i in x)
+		if (x[i] !== x.__proto__[i])
+			ret.push(x[i]);
+	return ret;
+}
+
+var parseComment = function(commentString)
+{
+	var tokens = commentString.split(";");
+	var ret = {};
+	
+	for (var k=0; k<tokens.length; k++)
+	{
+		var token = tokens[k].trim();
+		var hasParam = token.indexOf('(') > 0 && token.indexOf(')') > 0;
+		var params = {};
+		var argument = token;
+		if (hasParam)
+		{
+			var i0 = token.indexOf('(');
+			var i1 = token.indexOf(')');
+			var rawParams = token.substring(i0+1, i1);
+			rawParams = rawParams.split(',');
+			
+			for (var k=0; k<rawParams.length; k++)
+			{
+				var p = rawParams[k].trim();
+				if (p.indexOf('=') > 0)
+				{
+					p = p.split('=',2);
+					params[p[0].trim()] = p[1].trim();
+				}
+				else
+				{
+					params[p] = true;
+				}
+			}
+			argument = token.substring(0, i0);
+		}
+		
+		if (typeof ret[argument] !== 'undefined')
+		{
+			throw "Duplicate argument: " + argument;
+		}
+		ret[argument] = params;
+	}
+	
+	return ret;
+};
 
 var parse = function (str)
 {
@@ -165,6 +225,14 @@ requestParser.modifiers = {
 	"collate":			/COLLATE\s+[^\s,]+/i,
 	"default":			/DEFAULT\s+[^\s,]+/i,
 	"unsigned":			/unsigned/i,
+	"comment":			/COMMENT\s+'([^']+)'/i,
+};
+requestParser.tableModifiers = {
+	"engine": /engine=([^\s;]+)/i ,
+	"auto increment value": /auto_increment=([0-9]+)/i ,
+	"default charset": /default\s+charset=([^\s;]+)/i ,
+	"collate": /collate=([^\s;]+)/i ,
+	"comment": /comment='([^']+)'/i ,
 };
 requestParser.keys = {
 	"primary":	/PRIMARY KEY\s+\([^\)]+\)/i ,
@@ -179,6 +247,10 @@ requestParser.prototype.parseKey = function ()
 requestParser.prototype.parseModifier = function ()
 {
 	return this.__parseExpression(requestParser.modifiers, "no modifier found");
+};
+requestParser.prototype.parseTableModifier = function ()
+{
+	return this.__parseExpression(requestParser.tableModifiers, "no table modifier found");
 };
 
 requestParser.prototype.parseConstraint = function()
@@ -220,6 +292,7 @@ requestParser.prototype.__parseExpression = function(dictionary, errorMessage)
 	var str = this.request.substring(this.pos);
 	var keyExpression = null;
 	var key;
+	var groups=[];
 	
 	for (key in dictionary)
 	{
@@ -235,6 +308,13 @@ requestParser.prototype.__parseExpression = function(dictionary, errorMessage)
 			else
 			{
 				keyExpression = raw;
+				//console.log('found expr:', reg)
+				
+				for (var i=1; i<result.length; i++)
+				{
+					groups.push(result[i]);
+				}
+				
 				break;
 			}
 		}
@@ -248,6 +328,7 @@ requestParser.prototype.__parseExpression = function(dictionary, errorMessage)
 	return {
 		type: key,
 		expression: keyExpression,
+		groups: groups,
 	};
 };
 
@@ -432,13 +513,60 @@ var parseCreateTable = function (request)
 		}
 	}
 	
-	//TODO: parse table modifiers and properties
+	//jump outside parenthesis
+	request.skipString(')');
+	request.skipMany(' ');
+	
+	//parse table modifiers and properties
+	var tableModifiers = [];
+	var parent=null;
+	
+	while (request.pos < request.request.length)
+	{
+		try
+		{
+			var tmod = request.parseTableModifier();
+			console.log("Got table modifier: "+tmod.type+", "+tmod.expression);
+		}
+		catch (e)
+		{
+			console.log('////////////////////');
+			console.log(request.request.substring(request.pos))
+			console.log("Table: ", tableName);
+			throw e;
+		}
+		
+		if (tmod.type == 'comment')
+		{
+			var arguments = parseComment(tmod.groups[0]);
+			for (var argument in arguments)
+			{
+				var params = arguments[argument];
+				var keys = getKeys(params);
+				
+				console.log(params,"and",keys)
+				
+				if (argument === '@extends')
+				{
+					if (keys.length != 1)
+						throw "Wrong argument count for argument " + argument+": "+tmod.groups[0];
+					parent = keys[0];
+				}
+				else
+					throw "Unknown table argument: " + argument + " for table " + tableName;
+			}
+		}
+		tableModifiers.push(tmod);
+		request.skipMany(' ');
+	}
 	
 	return {
 		name: tableName,
 		fields: tableFields,
 		keys: tableKeys,
 		constraints: tableConstraints,
+		modifiers: tableModifiers,
+		parent: parent,
 	};
 };
 
@@ -533,10 +661,11 @@ var phpClass = function(name, sqlTable, identifiers)
 	console.log("new PHP Class: ", name,sqlTable);
 	
 	this.name=name;
-	this.extends="Record";
 	this.classPrefix="";
 	this.sqlTable=sqlTable;
 	this.fields = {};
+	this.parent=null;
+	this.children = [];
 	this.ref = {
 		one2one: {},
 		one2many: {},
@@ -563,6 +692,7 @@ phpClass.prototype.many2one = function(thisField, thatClass, thatField)
 	this.ref.many2one[thatClass.name] = { thisField:thisField, thatField:thatField, real:true };
 	thatClass.ref.one2many[this.name] = { thisField:thatField, thatField:thisField };
 };
+
 phpClass.prototype.serialize = function ()
 {
 	var code = "";
@@ -610,7 +740,7 @@ phpClass.prototype.serialize = function ()
 	};
 	
 	writeLine("<?php");
-	writeLine("class "+this.classPrefix+this.name+" extends "+this.extends);
+	writeLine("class "+this.classPrefix+this.name+" extends "+this.parent);
 	block(function()
 	{
 		writeLine("// SQL info");
@@ -653,6 +783,10 @@ phpClass.prototype.serialize = function ()
 		fieldTypes.bool={};
 		fieldTypes.enum={};
 		
+		var uiTypes = {};
+		uiTypes.slider={};
+		uiTypes.media={};
+		
 		for (var i in this.fields)
 		{
 			var name=this.fields[i].name;
@@ -691,15 +825,70 @@ phpClass.prototype.serialize = function ()
 			
 			if (category)
 				fieldTypes[category][name] = val;
+				
+			//then handle ui modifiers
+			for (var j=0; j<this.fields[i].modifiers.length; j++)
+			{
+				var mod = this.fields[i].modifiers[j];
+				if (mod.type == 'comment')
+				{
+					var arguments = parseComment(mod.groups[0]);
+					for (var argument in arguments)
+					{
+						var params = arguments[argument];
+						
+						if (argument == '@slider')
+						{
+							uiTypes.slider[name]='true';
+						}
+						else if (argument == '@media')
+						{
+							var mediaTypes = {
+								'image': 1,
+								'text': 1,
+								'youtube': 1,
+								//add more here...
+							};
+							var allowed = {};
+							for (var p in params)
+							{
+								var val = params[p];
+								if (p == 'type')
+								{
+									if (typeof this.fields[val] === 'undefined' ||
+										!this.fields[val].type.word.isEnum)
+										throw "@media:type argument must refer to a valid Enum/Set field name";
+									allowed['type'] = "'"+val+"'";
+								}
+								else if (typeof mediaTypes[p] !== 'undefined')
+									allowed[p] = 'true';
+								else
+									throw "Unsupported @media type: " + p;
+							}
+							uiTypes.media[name] = allowed;
+						}
+						else
+							throw "Unknown comment argument: " + token;
+					}
+				}
+			}
 		}
+		
 		sqlInfo.fieldTypes = {};
 		for (var categoryType in fieldTypes)
-		{
 			sqlInfo.fieldTypes[categoryType] = fieldTypes[categoryType];
-		}
+		
+		sqlInfo.uiFieldTypes = {};
+		for (var categoryType in uiTypes)
+			sqlInfo.uiFieldTypes[categoryType] = uiTypes[categoryType];
 		
 		//sql references
 		var sqlRefs = {
+			many2one: {},
+			one2many: {},
+			one2one: {},
+		};
+		var fakeSqlRefs = {
 			many2one: {},
 			one2many: {},
 			one2one: {},
@@ -713,21 +902,28 @@ phpClass.prototype.serialize = function ()
 			for (var thatClassName in this.ref[refType])
 			{
 				var ref = this.ref[refType][thatClassName];
-				//dont print fake relationships in sql info block
-				if (!ref.real)
-					continue;
 				
-				sqlRefs[refType][thatClassName] = {
+				//dont print fake relationships in sql info block
+				var col = ref.real ? sqlRefs : fakeSqlRefs;
+				
+				col[refType][thatClassName] = {
 					foreignKey: "'"+ref.thisField+"'",
 					referenceKey: "'"+ref.thatField+"'",
 				};
 			}
 		}
 		sqlInfo.references = {};
+		sqlInfo.foreignReferences = {};
 		for (var i in sqlRefs)
-		{
 			sqlInfo.references[i] = sqlRefs[i];
-		}
+		for (var i in fakeSqlRefs)
+			sqlInfo.foreignReferences[i] = fakeSqlRefs[i];
+		
+		//inheritance, if any
+		sqlInfo.parent = this.parent && this.parent.name ? ("'"+this.parent.name+"'") : 'null';
+		sqlInfo.children = {};
+		for (var i=0; i<this.children.length; i++)
+			sqlInfo.children[this.children[i].name] = 'true';
 		
 		writeLine("public static $SQLINFO = " + phpize(sqlInfo) + ";");
 		writeLine("\n");
@@ -828,6 +1024,9 @@ phpClass.prototype.serialize = function ()
 			}
 		}
 		
+		//inheritance casting
+		writeLine("// Inheritance casts");
+		
 		writeLine("// Accessors");
 		for (var i in this.fields)
 		{
@@ -890,17 +1089,11 @@ phpClass.prototype.serialize = function ()
 
 var classes = {};
 
-var getClass = function(className, sqlTable, identifiers)
-{
-	if (classes[className])
-		return classes[className];
-	
-	var x = new phpClass(name,sqlTable,identifiers);
-	classes[className]=x;
-	return x;
-};
 var getClassByTable = function (table)
 {
+	if (!table)
+		throw "Table cannot be null";
+	
 	var className = table2className(table.name);
 	if (classes[className])
 		return classes[className];
@@ -919,6 +1112,26 @@ var getClassByTable = function (table)
 	}
 	
 	var x = new phpClass(className, sqlTable, identifiers);
+	
+	if (table.parent)
+	{
+		for (var i in classes)
+		{
+			if (classes[i].sqlTable === table.parent)
+			{
+				x.parent = classes[i].name;
+				classes[i].children.push(x);
+				break;
+			}
+		}
+		if (!x.parent)
+			throw "Failed to find parent class: " + table.parent;
+	}
+	else
+	{
+		x.parent = "Record";
+	}
+	
 	classes[className]=x;
 	return x;
 };
@@ -1058,3 +1271,5 @@ for (var i in classes)
 	
 	console.log("Created classes for type: " + obj.name);
 }
+
+console.log("Complete.");
